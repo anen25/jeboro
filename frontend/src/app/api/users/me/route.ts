@@ -3,6 +3,8 @@ import { PrismaClient } from '@prisma/client';
 import { auth } from '@/lib/auth'; // Import from our auth lib
 import { headers } from 'next/headers';
 
+export const runtime = 'edge';
+
 const prisma = new PrismaClient();
 
 export async function GET(request: Request) {

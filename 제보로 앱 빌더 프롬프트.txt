@@ -1,0 +1,295 @@
+**프로젝트 요약 (한 문장)**
+“제보로(jeboro)”는 **모바일 우선 음성 제보 플랫폼**으로, 소상공인·개인(제보자)이 음성으로 쉽게 제보하면 기자들이 검증·기사화할 수 있도록 연결해 주는 양면 마켓플레이스입니다. 핵심 원칙은 **브라우저 내 음성 → 텍스트(Web Speech API)만 사용**하고 **음성 파일은 서버에 저장하거나 전송하지 않음**입니다.
+
+---
+
+## 1) 목표물(Deliverables)
+
+AI 앱 빌더는 다음 결과물을 생성하고 배포 가능한 상태로 출력해야 합니다:
+
+1. **Next.js 15 + TypeScript 웹앱** (프론트엔드 + 서버리스 API)
+2. **TailwindCSS + Shadcn/UI** 스타일 가이드 및 컴포넌트
+3. **Cloudflare Pages + Cloudflare Workers**용 배포 구성(로컬에서 배포 가능한 설정 포함)
+4. **Prisma schema**(PostgreSQL / Neon) 및 마이그레이션 파일
+5. **Auth**: better-auth 연동(카카오, 네이버, 구글) 및 JWT/세션 처리
+6. **이미지 저장**: Cloudflare R2 연동 코드(이미지 업로드/삭제)
+7. **관리자·기자·제보자 각 대시보드**(내비·화면·API)
+8. **랜딩페이지** (두 집단을 동시에 끌어당기도록 구성된 UI/카피 포함)
+9. **수익모델 구현 포인트**(기자 구독, 제보자 유료 노출, 언론사 패키지 등) — 결제 연동은 토스페이먼츠 플로우(모의결제/샌드박스)로 준비
+10. **테스트용 더미 데이터 및 스토리북(컴포넌트)**
+11. **README**(배포, 환경변수, 운영 가이드 포함) 및 **운영·모니터링 권장사항**
+
+---
+
+## 2) 핵심 원칙(절대 준수)
+
+* **음성 파일은 절대 서버에 저장 또는 전송하지 않습니다.** (초기 MVP는 브라우저 Web Speech API만 사용).
+* **카카오→네이버→구글** 로그인 버튼 순서를 유지합니다.
+* **역할 기반 접근 제어(RBAC)**: INFORMANT(제보자), REPORTER(기자), ADMIN(관리자).
+* **데이터 프라이버시**: 제보자의 신원은 기본적으로 공개되지 않음(옵트인 허용 시 예외).
+* **48시간 엠바고 규칙**: EXCLUSIVE 제보 선택 시 48시간 타이머, 미완료 시 자동 OPEN 전환.
+* **모바일 퍼스트 디자인**, 접근성(ARIA) 준수.
+
+---
+
+## 3) 우선순위 — MVP (즉시 구현해야 할 항목)
+
+### 기능 (핵심)
+
+1. 랜딩페이지(히어로, 기능 카드, 기자/제보자 CTA, 데모 음성→텍스트 모듈)
+2. 소셜 로그인(카카오/네이버/구글) 및 사용자 등록(역할 선택)
+3. 제보 작성 흐름
+
+   * Web Speech API로 실시간 텍스트 변환(브라우저에서만)
+   * 제목/카테고/공개방식(OPEN/EXCLUSIVE) 선택
+   * 제출 → POST /api/reports (JSON 텍스트만 전송)
+4. 기자 피드(공개 제보 목록, EXCLUSIVE 제안 참여 UI)
+5. Pick(기자가 제보 선택) 및 EXCLUSIVE 워크플로우(엠바고 타이머)
+6. 관리자 대시보드(제보 심사, 기자 인증 승인/반려, 평판 관리)
+7. 간단한 평판 지표(기자 응답속도, 기사화율 등) 데이터 수집 가능성
+8. 결제 샌드박스 연결 포인트(토스페이먼츠) — 기자 구독, 제보자 부가 노출 상품
+
+### API (기초)
+
+* POST /api/auth/login
+* GET /api/users/me
+* POST /api/reports
+* GET /api/reports (필터: status, publishType, region)
+* GET /api/reports/my
+* PUT /api/reports/:id/status (관리자)
+* POST /api/picks
+* DELETE /api/picks/:reportId
+* POST /api/payments (토스 샌드박스)
+
+---
+
+## 4) 데이터 모델(Prisma 스키마 요약 — 반드시 포함)
+
+(아래는 반드시 `prisma/schema.prisma` 에 반영)
+
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  name      String?
+  role      Role      @default(INFORMANT)
+  provider  AuthProvider
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  reports   Report[]
+  picks     Pick[]
+  verifications Verification?
+  reputation Reputation?
+}
+
+model Report {
+  id          String      @id @default(cuid())
+  title       String
+  content     String      @db.Text
+  publishType PublishType @default(OPEN)
+  status      Status      @default(PENDING)
+  region      String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  author      User        @relation(fields: [authorId], references: [id])
+  authorId    String
+  picks       Pick[]
+  embargoEnds DateTime?   // EXCLUSIVE 선택 시 엠바고 만료 시각
+}
+
+model Pick {
+  id         String   @id @default(cuid())
+  reporter   User     @relation(fields: [reporterId], references: [id])
+  reporterId String
+  report     Report   @relation(fields: [reportId], references: [id])
+  reportId   String
+  createdAt  DateTime @default(now())
+
+  @@unique([reporterId, reportId])
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String
+  status     VerifyStatus @default(PENDING)
+  docs       String?  // R2에 저장된 파일 키
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Reputation {
+  id               String  @id @default(cuid())
+  user             User    @relation(fields: [userId], references: [id])
+  userId           String  @unique
+  score            Int     @default(0)
+  articlesCount    Int     @default(0)
+  acceptanceRate   Float   @default(0.0)
+  lastActiveAt     DateTime?
+}
+ 
+enum Role { INFORMANT REPORTER ADMIN }
+enum Status { PENDING APPROVED REJECTED }
+enum PublishType { OPEN EXCLUSIVE }
+enum AuthProvider { KAKAO NAVER GOOGLE }
+enum VerifyStatus { PENDING APPROVED REJECTED }
+```
+
+---
+
+## 5) 화면별 요구사항(플로우 + 필수 요소)
+
+### 랜딩페이지
+
+* 히어로(강렬한 카피), 두 개 CTA(제보하기 / 기자가입)
+* 핵심 기능 3개 카드(음성→텍스트, EXCLUSIVE, 엠바고)
+* 데모 위젯: 브라우저에서 Web Speech API를 이용한 실시간 텍스트 데모(음성파일 업로드 금지)
+* 신뢰 배너(“음성 파일 서버에 저장하지 않음”, Cloudflare 기반 등)
+* 기자 전용 섹션(독점·우선 제보 강조)
+* 하단: FAQ / 파트너 언론사(50개 소개) / 연락처
+
+### 제보자(Informant) UI
+
+* /report/new: 음성 입력(녹음 버튼: start/stop), 실시간 텍스트 미리보기, 수정 가능 textarea
+* 카테고리, 지역, 공개 방식(OPEN/EXCLUSIVE), 익명 여부 선택(기본 익명)
+* 제출 후 상태: PENDING → 승인/반려 알림
+* /dashboard/informant/reports: 제출 내역, 상태, 기자의 제안 확인
+
+### 기자(Reporter) UI
+
+* /dashboard/reporter: 피드(OPEN, EXCLUSIVE, Picked), 필터(지역, 카테고리, 인기)
+* 제안서 제출 UI(짧은 템플릿, 최소 글자수 검증)
+* EXCLUSIVE 취재 수락/거절, 기사 등록(기사화 완료 플래그)
+* 평판 대시보드(응답속도, 수락률, 기사화 완료율, 신고 건수)
+* 결제 관리(구독 상태, 결제 이력)
+
+### 관리자(Admin) UI
+
+* /admin/dashboard: KPI(제보 수, 승인율, 기자 활동지표, 신고건수)
+* /admin/verifications: 기자 인증 요청 검토(파일 보기, 승인/반려, 코멘트)
+* /admin/reports: PENDING 제보 일괄 심사, 반려 사유 입력 템플릿
+* /admin/reputation: 기자 평판 수동 조정, 경고 발송, 영구 차단
+* 엠바고 관리: 48시간 자동 감시, 예외 처리 및 수동 공개/연장 기능
+
+---
+
+## 6) 수익구조(구현 포인트 및 UI 요소)
+
+AI 앱 빌더는 다음 수익 모델을 **시스템 기능으로 제공할 수 있게 구현**해야 합니다:
+
+1. **기자 구독(Subscription)**
+
+   * 역할별 기능 잠금/해제(OPEN만/EXCLUSIVE 참여 가능 등)
+   * 결제 플로우(토스페이먼츠 샌드박스) 및 구독 상태 유지 API
+
+2. **제보자 유료 노출(Boost)**
+
+   * 제보 작성 시 선택형 옵션(일회성 결제)
+   * 우선 알림·상단 노출 알고리즘 반영
+
+3. **언론사 패키지(B2B)**
+
+   * 언론사 계정 관리(여러 기자 연결)
+   * 기업용 대시보드(트래픽 리포트, 리포트 정산 화면)
+
+4. **AI 편집 서비스(유료)**
+
+   * 제보 텍스트를 기사 초안으로 변환하는 API(유료 기능 플래그)
+   * UI: 기사 자동생성 버튼 + 미리보기 + 구매 결제
+
+5. **광고/트래픽 기반 수익 공유(옵션)**
+
+   * 플랫폼에서 기사로 유입된 트래픽을 계측하고, 광고 수익을 언론사와 정산할 수 있도록 트래킹 API(초기엔 로그 기반)
+
+> 모든 유료 기능은 **사용자 선택형**으로 제공하고, 결제가 이루어지는 경우 **결제 영수증/내역**을 사용자에게 제공해야 합니다.
+
+---
+
+## 7) 운영 규칙·모더레이션·알고리즘(명세)
+
+* **제보 심사 흐름**: PENDING → ADMIN 승인 → APPROVED 또는 REJECTED(반려 사유 기재)
+* **EXCLUSIVE 워크플로우**: 기자가 Pick → 제보자 선택 → embargoEnds = now() + 48h → 기자가 기사화 완료하면 승인 플래그 → 미완료 시 자동 OPEN 전환(백그라운드 작업)
+* **기자 평판 산정(자동화 규칙)**: 기본 점수(0) → 기사화 완료(+10), 제안 무응답(-2 per 48h), 신고접수(-20) 등 (세부 가중치는 운영자 UI에서 조정 가능)
+* **신고 처리 SLA**: 신고 접수 후 72시간 내 1차 처리(관리자), 고위험은 24시간 이내 처리
+* **로그 보존·삭제 정책**: 민감 데이터 로그는 최소화, 법적 보존 요구사항 이외의 음성 데이터는 생성되지 않음
+
+---
+
+## 8) 보안·프라이버시·법무
+
+* HTTPS 권장(Cloudflare 기본 적용)
+* 환경변수 비밀 관리(데이터베이스 URL, 토스 키, OAuth 비밀)
+* 개인정보 처리는 대한민국 개인정보보호법 준수(개인식별정보 최소 수집 원칙)
+* 명예훼손·허위정보 관련 신고 절차 문서화(관리자 화면 내 링크)
+* 감사 로그(Audit log) 추가(관리자 조치, 인증 승인/반려 등 주요 이벤트)
+
+---
+
+## 9) 테스트·QA·배포
+
+* 단위 테스트(핵심 API), 통합 테스트(로그인 → 제보 제출 → 기자 Pick → 엠바고 → 기사화) 자동화 제공
+* E2E 테스트(Playwright 권장) 샘플 스크립트 포함
+* Dockerfile + GitHub Actions(테스트 → 빌드 → Cloudflare Pages 배포) 예시 워크플로우
+* 더미 데이터(50개 언론사, 기자 계정, 제보 샘플)로 초기 데모 페이지 제공
+
+---
+
+## 10) 산출물 형식 및 구조(요청)
+
+* Git 리포지토리(루트) 생성: `/frontend`(Next.js), `/backend`(Cloudflare Workers 파일), `/prisma`, `/infra`(배포 스크립트)
+* README: 설치·환경변수·마이그레이션·배포 가이드 포함
+* Postman 컬렉션 또는 OpenAPI 스펙 제공
+* 디자인: Figma 링크(또는 로컬 SVG 컴포넌트) — 기본 UI/컴포넌트와 랜딩페이지 시안 포함
+* 운영매뉴얼: 관리자 체크리스트(기자 인증 절차, 신고 처리 절차, 환불 정책 등)
+
+---
+
+## 11) 추가 요구(UX·카피·우선 정책)
+
+* **한국어 기본(ko-KR)**, 다국어 확장 준비(현실성: i18n 적용)
+* **모바일 첫 경험** 강조, 로그인 버튼은 카카오→네이버→구글 순으로 노출
+* 랜딩페이지 주요 카피(히어로, 기자 유치 문구, 신뢰 문구) 포함
+* **데모 모드**: 비로그인 방문자도 음성→텍스트 데모를 체험 가능(데이터는 로컬 세션만 유지)
+
+---
+
+## 12) MVP 이후(로드맵 권장)
+
+* Cloudflare AI(Whisper) 연동(옵션): 서버 처리 기반 STT 도입(사용자 동의 후)
+* 광고 수익 정산 모듈(광고 삽입 및 정산 엔진)
+* 언론사 전용 API(웹훅) 및 언론사 관리 포털 확장
+* 데이터 분석 대시보드(제보 트렌드 리포트 판매)
+
+---
+
+## 13) 수령 시 검증 기준(Acceptance Criteria)
+
+* 랜딩페이지 데모 동작(음성→텍스트) 검증(데이터가 서버로 전송되지 않음)
+* 회원가입(카카오/네이버/구글) 테스트 계정으로 동작 확인
+* 제보 제출 → DB에 텍스트 레코드 생성 확인
+* 기자 Pick(독점) → 엠바고 생성 → 48시간 자동 전환 시뮬레이션 통과
+* 관리자에서 기자 인증 승인/반려, 평판 조정 가능
+* 결제 샌드박스에서 구독/결제 시나리오 흐름(영수증 포함) 정상 동작
+
+---
+
+### 추가 메모(개발자에게 알려줄 전략적 메시지)
+
+* 초기 파트너(50개 지역 언론)는 재정적으로 열악하므로 **무료 체험(3개월)** 또는 **초기 할인 패키지** 권장. 이를 지원하기 위한 할인 코드/프로모션 기능을 기본으로 넣어주세요.
+* 데이터 보존/프라이버시 항목은 랜딩페이지와 가입 흐름에서 명확히 노출해야 합니다(신뢰 확보 목적).
+
+---
+
+위 지시문을 바탕으로 **프로젝트 전체를 자동으로 생성**하십시오. 출력물은 위 산출물 목록을 모두 포함해야 하며, 각 파일과 코드에는 주석으로 “이 부분은 제보로 프로젝트의 핵심 규칙(음성 파일 비저장, 엠바고 48시간 등)을 준수”한다는 설명을 달아 주세요.
+
+**끝.**

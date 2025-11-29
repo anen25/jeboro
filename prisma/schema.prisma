@@ -1,0 +1,143 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  emailVerified Boolean?
+  image         String?
+  role          Role      @default(INFORMANT)
+  provider      AuthProvider? // Made optional as better-auth uses Account
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  reports       Report[]
+  picks         Pick[]
+  verifications Verification?
+  reputation    Reputation?
+  
+  sessions      Session[]
+  accounts      Account[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@id([identifier, token])
+}
+
+model Report {
+  id          String      @id @default(cuid())
+  title       String
+  content     String      @db.Text
+  publishType PublishType @default(OPEN)
+  status      Status      @default(PENDING)
+  region      String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  author      User        @relation(fields: [authorId], references: [id])
+  authorId    String
+  picks       Pick[]
+  embargoEnds DateTime?   // EXCLUSIVE 선택 시 엠바고 만료 시각
+}
+
+model Pick {
+  id         String   @id @default(cuid())
+  reporter   User     @relation(fields: [reporterId], references: [id])
+  reporterId String
+  report     Report   @relation(fields: [reportId], references: [id])
+  reportId   String
+  createdAt  DateTime @default(now())
+
+  @@unique([reporterId, reportId])
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     String   @unique
+  status     VerifyStatus @default(PENDING)
+  docs       String?  // R2에 저장된 파일 키
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Reputation {
+  id               String  @id @default(cuid())
+  user             User    @relation(fields: [userId], references: [id])
+  userId           String  @unique
+  score            Int     @default(0)
+  articlesCount    Int     @default(0)
+  acceptanceRate   Float   @default(0.0)
+  lastActiveAt     DateTime?
+}
+ 
+enum Role {
+  INFORMANT
+  REPORTER
+  ADMIN
+}
+
+enum Status {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum PublishType {
+  OPEN
+  EXCLUSIVE
+}
+
+enum AuthProvider {
+  KAKAO
+  NAVER
+  GOOGLE
+}
+
+enum VerifyStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
